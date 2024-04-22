@@ -1,0 +1,192 @@
+//server code
+#include <iostream>
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <chrono>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <functional>
+#include <cstring>
+
+using namespace std;
+
+const int TARGET_PORT = 8080;
+
+class SecureEnvironment
+{
+private:
+    int currentTime;
+    mutex timeMutex;
+
+public:
+    SecureEnvironment() : currentTime(0) {}
+
+    int establishConnectionSocket()
+    {
+        int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+        sockaddr_in serverAddress;
+        serverAddress.sin_family = AF_INET;
+        serverAddress.sin_port = htons(TARGET_PORT);
+        serverAddress.sin_addr.s_addr = INADDR_ANY;
+
+        bind(serverSocket, (struct sockaddr *)&serverAddress,
+             sizeof(serverAddress));
+
+        listen(serverSocket, 5);
+
+        int clientSocket = accept(serverSocket, nullptr, nullptr);
+        return clientSocket;
+    }
+
+    void triggerEvent()
+    {
+        lock_guard<mutex> lock(timeMutex);
+        currentTime++;
+        cout << "Normal Event occurred at timestamp = " << getCurrentTimestamp() << endl;
+    }
+
+    void sendSecureEvent(int socket)
+    {
+        int senderTime = currentTime;
+        send(socket, &senderTime, sizeof(senderTime), 0);
+
+        lock_guard<mutex> lock(timeMutex);
+        currentTime++;
+        cout << "Sent Event occurred at timestamp = " << getCurrentTimestamp() << endl;
+    }
+
+    void receiveSecureEvent(int senderTime)
+    {
+        lock_guard<mutex> lock(timeMutex);
+        currentTime = max(currentTime, senderTime) + 1;
+        cout << "Received Event occurred at timestamp = " << getCurrentTimestamp() << endl;
+    }
+
+    void receiveSecureEvents(int newSocket)
+    {
+        int eventCount = 1;
+        while (eventCount > 0)
+        {
+            int senderTime;
+            read(newSocket, &senderTime, sizeof(senderTime));
+            receiveSecureEvent(senderTime);
+            eventCount--;
+        }
+    }
+
+    int getCurrentTimestamp()
+    {
+        return currentTime;
+    }
+};
+
+int main()
+{
+    SecureEnvironment localEnvironment;
+
+    int clientSocket = localEnvironment.establishConnectionSocket();
+
+    thread receiverThread([&localEnvironment, clientSocket]()
+                          { localEnvironment.receiveSecureEvents(clientSocket); });
+
+    localEnvironment.sendSecureEvent(clientSocket);
+    localEnvironment.triggerEvent();
+    localEnvironment.sendSecureEvent(clientSocket);
+    localEnvironment.triggerEvent();
+
+    receiverThread.join();
+    cout << "Timestamp at this environment = " << localEnvironment.getCurrentTimestamp() << endl;
+
+    return 0;
+}
+
+//client code
+#include <iostream>
+#include <thread>
+#include <mutex>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+using namespace std;
+
+const int SERVER_PORT = 8080;
+
+class SecureSystem {
+private:
+    int timeCounter;
+    mutex timeMutex;
+
+public:
+    SecureSystem() : timeCounter(0) {}
+
+    int establishSecureConnection() {
+        int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+        sockaddr_in serverAddress;
+        serverAddress.sin_family = AF_INET;
+        serverAddress.sin_port = htons(SERVER_PORT);
+        serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+        if (connect(clientSocket, (struct sockaddr*)&serverAddress,
+            sizeof(serverAddress)) == 0)
+            cout << "Connected to the secure server" << endl;
+
+        return clientSocket;
+    }
+
+    void triggerEvent() {
+        lock_guard<mutex> lock(timeMutex);
+        timeCounter++;
+        cout << "Event occurred at timestamp = " << getCurrentTimestamp() << endl;
+    }
+
+    void sendSecureEvent(int socket) {
+        lock_guard<mutex> lock(timeMutex);
+        timeCounter++;
+        int senderTime = timeCounter;
+        send(socket, &senderTime, sizeof(senderTime), 0);
+        cout << "Sent Event at timestamp = " << getCurrentTimestamp() << endl;
+    }
+
+    void receiveSecureEvent(int receivedTime) {
+        lock_guard<mutex> lock(timeMutex);
+        timeCounter = max(timeCounter + 1, receivedTime);
+    }
+
+    void receiveSecureEvents(int socket) {
+        int eventCount = 2;
+        while (eventCount > 0) {
+            eventCount--;
+            int receivedTime;
+            read(socket, &receivedTime, sizeof(receivedTime));
+            receiveSecureEvent(receivedTime);
+            cout << "Received Event at timestamp = " << getCurrentTimestamp() << endl;
+        }
+    }
+
+    int getCurrentTimestamp() {
+        return timeCounter;
+    }
+};
+
+int main() {
+    SecureSystem localSecureSystem;
+
+    int clientSocket = localSecureSystem.establishSecureConnection();
+    thread receiverThread([&localSecureSystem, clientSocket]() { localSecureSystem.receiveSecureEvents(clientSocket); });
+
+    if (clientSocket != -1) {
+        localSecureSystem.sendSecureEvent(clientSocket);
+    }
+
+    receiverThread.join();
+    cout << "Timestamp at this system = " << localSecureSystem.getCurrentTimestamp() << endl;
+
+    return 0;
+}
